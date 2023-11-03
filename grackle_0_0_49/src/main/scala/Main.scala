@@ -17,7 +17,6 @@ import edu.gemini.grackle.syntax.StringContextOps
 import scala.concurrent.{ExecutionContext, ExecutionContextExecutor}
 
 case class Inner(inner: String)
-case class Outer(id: Long, value: String, inner: Inner)
 
 trait TestMapping[F[_]] extends DoobieMapping[F] {
   override val schema: Schema =
