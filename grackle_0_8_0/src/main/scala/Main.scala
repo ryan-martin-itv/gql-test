@@ -1,17 +1,17 @@
 import cats.data.Ior
-import cats.effect.{Blocker, ContextShift, IO}
+import cats.effect._
 import cats.implicits.catsSyntaxIorId
 import com.zaxxer.hikari.HikariDataSource
 import doobie.Meta
 import doobie.hikari.HikariTransactor
-import edu.gemini.grackle.Cursor.Env
-import edu.gemini.grackle.Path.UniquePath
+import edu.gemini.grackle.Cursor.{Context, Env}
+import edu.gemini.grackle.PathTerm.UniquePath
 import edu.gemini.grackle.Predicate._
 import edu.gemini.grackle.Query._
 import edu.gemini.grackle.QueryCompiler.SelectElaborator
 import edu.gemini.grackle.Value.StringValue
 import edu.gemini.grackle._
-import edu.gemini.grackle.doobie.{DoobieMapping, DoobieMonitor}
+import edu.gemini.grackle.doobie.postgres.{DoobieMapping, DoobieMonitor}
 import edu.gemini.grackle.syntax.StringContextOps
 
 import scala.concurrent.{ExecutionContext, ExecutionContextExecutor}
@@ -20,7 +20,7 @@ trait TestMapping[F[_]] extends DoobieMapping[F] {
   override val schema: Schema =
     schema"""
           type Query {
-            test(string: String!): [Outer!]!
+            test(string: String!): [Outer!]
           }
 
           scalar Long
@@ -61,7 +61,7 @@ trait TestMapping[F[_]] extends DoobieMapping[F] {
       ObjectMapping(
         tpe = QueryType,
         fieldMappings = List(
-          SqlRoot("test")
+          SqlObject("test")
         )
       ),
       PrefixedMapping(
@@ -83,7 +83,7 @@ trait TestMapping[F[_]] extends DoobieMapping[F] {
         fieldMappings = List(
           SqlField("id", inner.id , key = true, hidden = true),
           SqlField("join", inner.join, key = true, hidden = true),
-          SqlField("inner", inner.value),
+          SqlField("inner", inner.value)
         )
       ),
       LeafMapping[Long](LongType)
@@ -109,11 +109,11 @@ trait TestMapping[F[_]] extends DoobieMapping[F] {
     )
   )
 
-  def debug(query: Query): MappedQuery = MappedQuery.apply(query, Nil, QueryType)
+  def debug(query: Query): Result[MappedQuery] = MappedQuery.apply(query, Context(QueryType))
 
   def renderQuery(query: String): Fragment = {
     val Ior.Right(q) = compiler.compile(query)
-    val s = debug(q.query)
+    val Ior.Right(s) = debug(q.query)
     s.fragment
   }
 }
@@ -134,12 +134,10 @@ object Main extends App {
     """
 
   val ec: ExecutionContextExecutor = ExecutionContext.global
-  implicit val cs: ContextShift[IO] = IO.contextShift(ec)
-  val blocker: Blocker = Blocker.liftExecutionContext(ec)
 
   lazy val transactor = {
     val ds = new HikariDataSource
-    HikariTransactor[IO](ds, ec, blocker)
+    HikariTransactor[IO](ds, ec)
   }
 
   val mapping: TestMapping[IO] = new DoobieMapping[IO](transactor, DoobieMonitor.noopMonitor) with TestMapping[IO]
@@ -149,10 +147,18 @@ object Main extends App {
        - LEFT JOIN inner ON outer.join inner.join
        - WHERE ( outer.value = ? ) AND ( outer.id = inner.id )
      Result:
-      SELECT inner.value, inner.id, inner.join, outer.id, outer.join, outer.value
+      SELECT inner_outer_nested.id,
+             inner_outer_nested.join,
+             inner_outer_nested.value,
+             outer.id    AS id_alias_0,
+             outer.join  AS join_alias_1,
+             outer.value AS value_alias_2
       FROM outer
-               LEFT JOIN inner ON outer.join = inner.join
-      WHERE (outer.value = ?)
-        AND (outer.id = inner.id)
+               INNER JOIN outer ON (outer.id = outer.id)
+               INNER JOIN LATERAL (SELECT inner.join, inner.id, inner.value
+                                   FROM inner
+                                            INNER JOIN outer ON (outer.join = inner.join) ) AS inner_outer_nested
+                          ON (inner_outer_nested.join = outer.join)
+      WHERE ((outer.value = ?))
    */
 }
